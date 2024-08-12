@@ -1,209 +1,210 @@
-import io
-from typing import Dict, List, Tuple
+import math
+from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pulp
 import streamlit as st
+from pulp import LpBinary, LpMaximize, LpProblem, LpVariable, lpSum
 
 
+# 入力データ作成、ゴキブリ・殺虫剤設置可能点生成
+def make_data(n: int, upper: int, seed: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    ランダムなゴキブリ・殺虫剤の設置可能点を生成する関数
+
+    Parameters:
+        n (int): 生成する点の数
+        upper (int): 点の座標の上限
+        seed (int, optional): 乱数生成の種。デフォルトは0
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: x座標とy座標の配列
+    """
+    np.random.seed(seed)  # 乱数シードを設定
+    X = np.random.randint(0, upper, size=n)
+    Y = np.random.randint(0, upper, size=n)
+    return X, Y
+
+# ゴキブリ(p1)と殺虫剤(p2)の距離を測る
+def distance(p1: np.ndarray, p2: np.ndarray) -> float:
+    """
+    2点間のユークリッド距離を計算する関数
+
+    Parameters:
+        p1 (np.ndarray): ゴキブリの座標
+        p2 (np.ndarray): 殺虫剤の座標
+
+    Returns:
+        float: 2点間の距離
+    """
+    dx = p1[0] - p2[0]
+    dy = p1[1] - p2[1]
+    return math.sqrt(dx * dx + dy * dy)
+
+# 需要変数(二値変数)行列を生成
+def make_matrix(ps: Tuple[np.ndarray, np.ndarray], r: float) -> np.ndarray:
+    """
+    ゴキブリと殺虫剤の距離に基づいて、需要変数行列を生成する関数
+
+    Parameters:
+        ps (Tuple[np.ndarray, np.ndarray]): ゴキブリと殺虫剤の座標
+        r (float): 殺虫剤の効果範囲
+
+    Returns:
+        np.ndarray: 需要変数行列
+    """
+    def check(a: float) -> int:
+        """
+        距離が効果範囲内かどうかを判定する関数
+
+        Parameters:
+            a (float): 距離
+
+        Returns:
+            int: 1または0
+        """
+        return 1 if a <= r else 0
+
+    unit_list = [np.array([n, m]) for n, m in zip(ps[0], ps[1])]
+    return np.array([[check(distance(p1, p2)) for p1 in unit_list] for p2 in unit_list])
+
+# パラメータを生成する関数
 @st.cache_data
 def generate_parameters(
-    a: int, b: int, G: List[str], positions: Dict[str, Tuple[int, int]], seed: int = 0
-) -> Tuple[
-    Dict[str, int],
-    Dict[Tuple[str, int, int, int, int], float],
-    Dict[Tuple[int, int, int, int], float],
-]:
-    np.random.seed(seed)
-
-    # N_gの生成
-    N_g = {g: np.random.randint(5, 10) for g in G}
-
-    # V_gの生成
-    V_g = {}
-    for g in G:
-        i_pos, j_pos = positions[g]
-        for i in range(a):
-            for j in range(b):
-                distance = np.sqrt((i - i_pos) ** 2 + (j - j_pos) ** 2)
-                V_g[(g, i_pos, j_pos, i, j)] = np.exp(-distance)
-
-    # Dの生成
-    D = {}
-    for i in range(a):
-        for j in range(b):
-            for i_prime in range(a):
-                for j_prime in range(b):
-                    distance = np.sqrt((i - i_prime) ** 2 + (j - j_prime) ** 2)
-                    D[(i, j, i_prime, j_prime)] = np.exp(-distance)
-
-    return N_g, V_g, D
-
-
-def solve_cockroach_elimination(
-    a: int,
-    b: int,
-    G: List[str],
-    positions: Dict[str, Tuple[int, int]],
-    N_g: Dict[str, int],
-    V_g: Dict[Tuple[str, int, int, int, int], float],
-    D: Dict[Tuple[int, int, int, int], float],
-    max_pesticides: int,
-) -> Dict[Tuple[int, int], int]:
-    # 決定変数
-    W = pulp.LpVariable.dicts(
-        "W", [(i, j) for i in range(a) for j in range(b)], 0, 1, cat=pulp.LpBinary
-    )
-
-    # 問題の定式化
-    prob = pulp.LpProblem("CockroachElimination", pulp.LpMaximize)
-
-    # 目的関数の設定
-    # V_g(i_pos,j_pos,i',j') * D(i,j,i',j')のi',j'についての積を計算
-    obj_1_dict = {}
-    for g in G:
-        i_pos, j_pos = positions[g]
-        for i in range(a):
-            for j in range(b):
-                obj_1 = 1.0
-                for i_prime in range(a):
-                    for j_prime in range(b):
-                        obj_1 *= V_g[(g, i_pos, j_pos, i_prime, j_prime)] * D[(i, j, i_prime, j_prime)]
-                obj_1_dict[(g, i, j)] = obj_1
-
-    # pulp.lpSum(N_g[g] * pulp.lpSum([W[(i, j)] * obj_1_dict[(g, i, j, i_prime, j_prime)] for i in range(a) for j in range(b) for i_prime in range(a) for j_prime in range(b)]) for g in G)を計算
-    prob += pulp.lpSum(
-        [
-            N_g[g]
-            * pulp.lpSum(
-                [W[(i, j)] * obj_1_dict[(g, i, j)] for i in range(a) for j in range(b)]
-            )
-            for g in G
-        ]
-    )
-
-
-    # 制約条件の追加
-    prob += pulp.lpSum([W[(i, j)] for i in range(a) for j in range(b)]) <= max_pesticides
-
-    # 問題を解く
-    prob.solve()
-
-    # 結果を取得
-    result = {(i, j): int(W[(i, j)].varValue) for i in range(a) for j in range(b)}
-
-    # 結果を表示
-    print(pulp.LpStatus[prob.status])
-
-    return result
-
-
-def visualize_result(
-    a: int,
-    b: int,
-    result: Dict[Tuple[int, int], int],
-    positions: Dict[str, Tuple[int, int]],
-    N_g: Dict[str, int],
-) -> io.BytesIO:
+    a: int, b: int, seed: int = 0, radius: float = 5.0
+) -> Tuple[np.ndarray, np.ndarray]:
     """
-    結果を可視化する関数
+    ゴキブリの数と需要変数の行列を生成する関数
 
     Parameters:
         a (int): グリッドの行数
         b (int): グリッドの列数
-        result (dict): 各セルに設置される殺虫剤の結果を含む辞書
-            - (i, j): セル (i, j) における殺虫剤の設置結果 (0 または 1)
-        positions (dict): 各群れの初期位置
-        N_g (dict): 各群れに属するゴキブリの数
+        seed (int, optional): 乱数生成の種。デフォルトは0
+        radius (float, optional): 殺虫剤の効果範囲。デフォルトは5.0
 
     Returns:
-        io.BytesIO: 生成されたグラフ画像を含むバッファ
+        Tuple[np.ndarray, np.ndarray]: ゴキブリの数を含む行列Wと需要変数行列A
     """
-    fig, ax = plt.subplots()
+    np.random.seed(seed)
+    W = np.random.randint(0, 3, size=(a, b)) # ゴキブリの生成方法は要検討
+    X, Y = make_data(a * b, max(a, b))
+    unit_positions = (X, Y)
+    A = make_matrix(unit_positions, radius)
+    return W, A
 
-    # グリッドを描画
-    for i in range(a):
-        for j in range(b):
-            if result[(i, j)] == 1:
-                ax.add_patch(plt.Rectangle((j, a - i - 1), 1, 1, color="red"))
+def solve_maximum_coverage_problem(facility_coverage: np.ndarray, p: int, w: np.ndarray) -> Tuple[np.ndarray, float]:
+    """
+    最大カバー問題を解決する関数
 
-    # ゴキブリの群れの位置と大きさを描画
-    for g, pos in positions.items():
-        i_pos, j_pos = pos
-        size = N_g[g]
-        circle = plt.Circle((j_pos + 0.5, a - i_pos - 0.5), size / 10, color="blue", alpha=0.5)
-        ax.add_patch(circle)
-        ax.text(j_pos + 0.5, a - i_pos - 0.5, f"{size}", color="white", ha="center", va="center")
+    Parameters:
+        facility_coverage (np.ndarray): 殺虫剤とゴキブリのカバー関係を示す行列
+        p (int): 設置できる殺虫剤の最大数
+        w (np.ndarray): 各地点におけるゴキブリの数
 
-    ax.set_xlim(0, b)
-    ax.set_ylim(0, a)
-    ax.set_aspect("equal", adjustable="box")
+    Returns:
+        Tuple[np.ndarray, float]: 選択された殺虫剤の配列と駆除されたゴキブリの合計数
+    """
+    num_facilities, num_users = facility_coverage.shape
 
-    plt.axis("off")
+    # 問題の定義
+    prob = LpProblem("Maximum_Coverage", LpMaximize)
 
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
+    # 変数の定義
+    x = LpVariable.dicts("x", range(num_facilities), cat=LpBinary)
+    z = LpVariable.dicts("z", range(num_users), cat=LpBinary)
 
-    return buf
+    # 目的関数の設定: 駆除されたゴキブリの数を最大化
+    prob += lpSum(w[i] * z[i] for i in range(num_users))
 
+    # 制約条件: 選択する施設の数はp個以下
+    prob += lpSum(x[j] for j in range(num_facilities)) == p
 
+    # 制約条件: 各ゴキブリがカバーされる条件
+    for i in range(num_users):
+        prob += z[i] <= lpSum(facility_coverage[j, i] * x[j] for j in range(num_facilities))
+
+    # 問題の解決
+    prob.solve()
+
+    # 結果の表示
+    selected_facilities = np.array([x[j].varValue for j in range(num_facilities)])
+
+    # 駆除されたゴキブリの合計数を計算
+    total_killed = sum(w[i] * z[i].varValue for i in range(num_users))
+
+    # 選択された施設のインデックスを表示
+    selected_indices = [j for j in range(num_facilities) if selected_facilities[j] == 1]
+    print("選択された殺虫剤のインデックス:", selected_indices)
+
+    return selected_facilities, total_killed
+
+def visualize_result(
+    W: np.ndarray, A: np.ndarray, selected_facilities: np.ndarray, facility_positions: Tuple[np.ndarray, np.ndarray]
+) -> None:
+    """
+    結果を可視化する関数
+
+    Parameters:
+        W (np.ndarray): ゴキブリの数を含む行列
+        A (np.ndarray): 需要変数行列
+        selected_facilities (np.ndarray): 選択された殺虫剤の配列
+        facility_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤の座標
+    """
+    num_rows, num_cols = W.shape
+
+    # グリッドの表示
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.set_aspect("equal")
+    ax.set_xlim(-0.5, num_cols - 0.5)
+    ax.set_ylim(-0.5, num_rows - 0.5)
+    ax.set_xticks(np.arange(0, num_cols, 1))
+    ax.set_yticks(np.arange(0, num_rows, 1))
+    ax.grid(which='both', color='gray', linestyle='--', linewidth=0.7)
+
+    # ゴキブリの数を表示
+    for i in range(num_rows):
+        for j in range(num_cols):
+            size = min(W[i, j] * 10, 100)  # サイズを制限して視覚的に調整
+            ax.plot(j, i, 'ro', markersize=size)
+            ax.text(j, i, f"{W[i, j]}", ha="center", va="center", color="white", fontsize=10, weight='bold')
+
+    # 殺虫剤の位置と影響範囲を表示
+    for idx, (i, j) in enumerate(zip(*facility_positions)):
+        if selected_facilities[idx] > 0:
+            # 殺虫剤の位置を青色の円で表示
+            circle_center = plt.Circle((j, i), 0.5, color='blue', fill=True, edgecolor='black', linewidth=1.5)
+            ax.add_patch(circle_center)
+            # 殺虫剤の影響範囲を青い円で表示
+            influence_circle = plt.Circle((j, i), 3, color='blue', fill=False, linestyle='--', linewidth=2)
+            ax.add_patch(influence_circle)
+
+    # プロットを表示
+    plt.gca().invert_yaxis()
+    st.pyplot(fig)
+
+# ストリームリットによるUIの作成
 def main() -> None:
     """
-    Streamlit アプリケーションのメイン関数
+    Streamlitを使った最大カバー問題のシミュレーションと可視化を行うメイン関数
     """
-    # タイトル
-    st.title("ゴキブリの群れの撲滅問題")
+    st.title("最大カバー問題シミュレーション")
+    st.write("ゴキブリの数と殺虫剤の設置場所を最適化します。")
 
-    # グリッドの行数と列数
-    a: int = st.slider("グリッドの行数", 5, 20, 10)
-    b: int = st.slider("グリッドの列数", 5, 20, 10)
+    a = st.slider("グリッドの行数", min_value=1, max_value=20, value=10)
+    b = st.slider("グリッドの列数", min_value=1, max_value=20, value=10)
+    seed = st.slider("乱数生成のシード値", min_value=0, max_value=1000, value=0)
+    radius = st.slider("殺虫剤の効果範囲", min_value=0.1, max_value=10.0, value=5.0)
+    p = st.slider("設置できる殺虫剤の最大数", min_value=1, max_value=20, value=5)
 
-    # ゴキブリの群れのリスト
-    G: List[str] = ["A", "B", "C"]
+    if st.button("シミュレーション開始"):
+        W, A = generate_parameters(a, b, seed, radius)
+        X, Y = make_data(a * b, max(a, b))
+        facility_positions = (X, Y)
+        selected_facilities, total_killed = solve_maximum_coverage_problem(A, p, W.flatten())
+        visualize_result(W, A, selected_facilities, facility_positions)
 
-    # 各群れの初期位置
-    positions: Dict[str, Tuple[int, int]] = {
-        "A": (np.random.randint(0, a), np.random.randint(0, b)),
-        "B": (np.random.randint(0, a), np.random.randint(0, b)),
-        "C": (np.random.randint(0, a), np.random.randint(0, b)),
-    }
-
-    # パラメータの生成
-    N_g, V_g, D = generate_parameters(a, b, G, positions)
-
-    # 殺虫剤の最大設置数
-    max_pesticides: int = st.slider("殺虫剤の最大設置数", 1, 10, 5)
-
-    # ゴキブリの群れの撲滅問題を解く
-    result: Dict[Tuple[int, int], int] = solve_cockroach_elimination(
-        a, b, G, positions, N_g, V_g, D, max_pesticides
-    )
-
-    # 結果の可視化
-    buf: io.BytesIO = visualize_result(a, b, result, positions, N_g)
-    st.image(buf)
-
-    # W_ijの値を表示
-    st.write("W_ijの値")
-
-    for i in range(a):
-        for j in range(b):
-            st.write(f"W[{i}, {j}] = {result[(i, j)]}")
-
-    # ゴキブリの群れの数を表示
-    st.write("ゴキブリの群れの数")
-    st.write(N_g)
-
-    # ゴキブリの移動確率を表示
-    st.write("ゴキブリの移動確率")
-    st.write(V_g)
-
-    # 殺虫剤に誘引される確率を表示
-    st.write("殺虫剤に誘引される確率")
-    st.write(D)
-
+        # 駆除されたゴキブリの合計数を表示
+        st.write(f"駆除されたゴキブリの合計数: {total_killed}")
 
 if __name__ == "__main__":
     main()

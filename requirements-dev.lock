@@ -322,7 +322,7 @@ soupsieve==2.5
     # via beautifulsoup4
 stack-data==0.6.3
     # via ipython
-streamlit==1.37.0
+streamlit==1.37.1
     # via research-template
 tenacity==8.5.0
     # via streamlit

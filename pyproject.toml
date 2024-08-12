@@ -5,7 +5,7 @@ description = "Add a short description here"
 authors = [{ name = "tubo213", email = "hoge@gmail.com" }]
 dependencies = [
     "pulp>=2.9.0",
-    "streamlit>=1.37.0",
+    "streamlit>=1.37.1",
     "watchdog>=4.0.1",
 ]
 readme = "README.md"

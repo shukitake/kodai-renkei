@@ -85,7 +85,7 @@ six==1.16.0
     # via python-dateutil
 smmap==5.0.1
     # via gitdb
-streamlit==1.37.0
+streamlit==1.37.1
     # via research-template
 tenacity==8.5.0
     # via streamlit
