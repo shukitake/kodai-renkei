@@ -5,7 +5,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 from pulp import LpBinary, LpMaximize, LpProblem, LpVariable, lpSum
+import pandas as pd
 
+
+# ゴキブリの分布をエクセルファイルから読み込む関数
+def load_cockroach_distribution(file) -> np.ndarray:
+    """
+    エクセルファイルからゴキブリの分布を読み込む関数
+
+    Parameters:
+        file: アップロードされたエクセルファイル
+
+    Returns:
+        np.ndarray: ゴキブリの数を含む行列
+    """
+    df = pd.read_excel(file, header=None)
+    return df.values
 
 # 入力データ作成、ゴキブリ・殺虫剤設置可能点生成
 def make_data(n: int, upper: int, seed: int = 0) -> Tuple[np.ndarray, np.ndarray]:
@@ -138,8 +153,9 @@ def solve_maximum_coverage_problem(facility_coverage: np.ndarray, p: int, w: np.
 
     return selected_facilities, total_killed
 
+
 def visualize_result(
-    W: np.ndarray, A: np.ndarray, selected_facilities: np.ndarray, facility_positions: Tuple[np.ndarray, np.ndarray]
+    W: np.ndarray, A: np.ndarray, selected_facilities: np.ndarray, facility_positions: Tuple[np.ndarray, np.ndarray], radius: float
 ) -> None:
     """
     結果を可視化する関数
@@ -149,6 +165,7 @@ def visualize_result(
         A (np.ndarray): 需要変数行列
         selected_facilities (np.ndarray): 選択された殺虫剤の配列
         facility_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤の座標
+        radius (float): 殺虫剤の効果範囲
     """
     num_rows, num_cols = W.shape
 
@@ -174,13 +191,14 @@ def visualize_result(
             # 殺虫剤の位置を青色の円で表示
             circle_center = plt.Circle((j, i), 0.5, color='blue', fill=True, edgecolor='black', linewidth=1.5)
             ax.add_patch(circle_center)
-            # 殺虫剤の影響範囲を青い円で表示
-            influence_circle = plt.Circle((j, i), 3, color='blue', fill=False, linestyle='--', linewidth=2)
+            # 殺虫剤の影響範囲を青い円で表示（指定されたradiusを使用）
+            influence_circle = plt.Circle((j, i), radius, color='blue', fill=False, linestyle='--', linewidth=2)
             ax.add_patch(influence_circle)
 
     # プロットを表示
     plt.gca().invert_yaxis()
     st.pyplot(fig)
+
 
 # ストリームリットによるUIの作成
 def main() -> None:
@@ -190,20 +208,25 @@ def main() -> None:
     st.title("最大カバー問題シミュレーション")
     st.write("ゴキブリの数と殺虫剤の設置場所を最適化します。")
 
-    a = st.slider("グリッドの行数", min_value=1, max_value=20, value=10)
-    b = st.slider("グリッドの列数", min_value=1, max_value=20, value=10)
-    seed = st.slider("乱数生成のシード値", min_value=0, max_value=1000, value=0)
-    radius = st.slider("殺虫剤の効果範囲", min_value=0.1, max_value=10.0, value=5.0)
+    # Excelファイルアップロード
+    uploaded_file = st.file_uploader("ゴキブリ分布のエクセルファイルをアップロードしてください", type=["xlsx"])
+    if uploaded_file is not None:
+        W = load_cockroach_distribution(uploaded_file)
+    else:
+        st.error("エクセルファイルをアップロードしてください。")
+        return
+
+    radius = st.slider("殺虫剤の効果範囲", min_value=0.1, max_value=10.0, value=0.1)
     p = st.slider("設置できる殺虫剤の最大数", min_value=1, max_value=20, value=5)
 
     if st.button("シミュレーション開始"):
-        W, A = generate_parameters(a, b, seed, radius)
+        a, b = W.shape
         X, Y = make_data(a * b, max(a, b))
         facility_positions = (X, Y)
+        A = make_matrix(facility_positions, radius)
         selected_facilities, total_killed = solve_maximum_coverage_problem(A, p, W.flatten())
-        visualize_result(W, A, selected_facilities, facility_positions)
+        visualize_result(W, A, selected_facilities, facility_positions, radius)
 
-        # 駆除されたゴキブリの合計数を表示
         st.write(f"駆除されたゴキブリの合計数: {total_killed}")
 
 if __name__ == "__main__":

@@ -62,6 +62,8 @@ decorator==5.1.1
     # via ipython
 defusedxml==0.7.1
     # via nbconvert
+et-xmlfile==1.1.0
+    # via openpyxl
 exceptiongroup==1.2.1
     # via anyio
     # via ipython
@@ -207,6 +209,8 @@ numpy==1.26.3
     # via pydeck
     # via seaborn
     # via streamlit
+openpyxl==3.1.5
+    # via research-template
 overrides==7.7.0
     # via jupyter-server
 packaging==22.0
