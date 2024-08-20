@@ -1,53 +1,101 @@
 from typing import Any, Tuple
+
 import japanize_matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pulp
 import streamlit as st
-from matplotlib.colors import Normalize
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 
-# ゴキブリの分布をエクセルファイルから読み込む関数
-def load_cockroach_distribution(file: "UploadedFile") -> np.ndarray[Any, Any]:
+
+def load_cockroach_and_obstacles(file: "UploadedFile") -> np.ndarray[Any, Any]:
     """
-    エクセルファイルからゴキブリの分布を読み込む関数
+    エクセルファイルからゴキブリの分布と障害物を読み込む関数
 
     Parameters:
         file: アップロードされたエクセルファイル
 
     Returns:
-        np.ndarray: ゴキブリの数を含む行列
+        np.ndarray: ゴキブリの数と障害物を含む行列
     """
     df = pd.read_excel(file, header=None)
     return df.values
 
-# ゴキブリと殺虫剤の距離を測る
-def distance(p1: np.ndarray, p2: np.ndarray) -> float:
+
+def distance_with_obstacles(p1: np.ndarray, p2: np.ndarray, grid: np.ndarray) -> float:
     """
-    2点間のユークリッド距離を計算する関数
+    障害物を考慮して2点間の距離を計算する関数
 
     Parameters:
-        p1 (np.ndarray): 1つ目の点の座標を含む配列 (x, y) の形
-        p2 (np.ndarray): 2つ目の点の座標を含む配列 (x, y) の形
+        p1 (np.ndarray): 1点目の座標
+        p2 (np.ndarray): 2点目の座標
+        grid (np.ndarray): 障害物を含むグリッド
 
     Returns:
-        float: 2点間のユークリッド距離
+        float: 2点間の距離 (障害物がある場合はinf)
     """
-    return np.linalg.norm(p1 - p2)
+    # 初期のユークリッド距離を計算
+    dist = np.linalg.norm(p1 - p2)
 
-# 需要変数行列を生成する関数
-def make_matrix(
+    # 障害物の座標を取得
+    obstacles = np.argwhere(grid == -1)
+
+    # 線分上の障害物が存在するかどうかをチェック
+    for obstacle in obstacles:
+        if is_on_segment(p1, p2, obstacle):
+            return float('inf')
+
+    return dist
+
+def is_on_segment(p1: np.ndarray, p2: np.ndarray, point: np.ndarray) -> bool:
+    """
+    点が直線セグメント上にあるかどうかをチェックする関数
+
+    Parameters:
+        p1 (np.ndarray): 直線セグメントの始点
+        p2 (np.ndarray): 直線セグメントの終点
+        point (np.ndarray): 判定する点
+
+    Returns:
+        bool: 点が直線セグメント上にある場合はTrue、それ以外はFalse
+    """
+    x0, y0 = p1
+    x1, y1 = p2
+    x, y = point
+
+    # ベクトル計算による直線距離の計算
+    line_vec = np.array([x1 - x0, y1 - y0])
+    point_vec = np.array([x - x0, y - y0])
+    line_length_sq = np.dot(line_vec, line_vec)
+
+    # 線分上の点までの投影
+    projection = np.dot(point_vec, line_vec) / line_length_sq
+
+    # 投影が線分の範囲内にあるかどうかを確認
+    if projection < 0 or projection > 1:
+        return False
+
+    # 投影点を計算し、その点と障害物までの距離を確認
+    projected_point = np.array([x0, y0]) + projection * line_vec
+    distance_to_segment = np.linalg.norm(projected_point - np.array([x, y]))
+
+    # 点が線分上にあり、かつ障害物までの距離が非常に小さい場合はTrue
+    return distance_to_segment < 1e-6
+
+def make_matrix_with_obstacles(
     cockroach_positions: Tuple[np.ndarray, np.ndarray],
     facility_positions: Tuple[np.ndarray, np.ndarray],
+    W: np.ndarray,
     r: float
 ) -> np.ndarray:
     """
-    ゴキブリと殺虫剤の位置に基づいて需要変数行列を生成する関数
+    障害物を考慮して需要変数行列を生成する関数
 
     Parameters:
         cockroach_positions (Tuple[np.ndarray, np.ndarray]): ゴキブリのx座標とy座標の配列
         facility_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤のx座標とy座標の配列
+        W (np.ndarray): ゴキブリの数と障害物を含む行列
         r (float): 殺虫剤の効果範囲
 
     Returns:
@@ -55,36 +103,24 @@ def make_matrix(
     """
     cockroach_list = np.array([cockroach_positions]).T
     facility_list = np.array([facility_positions]).T
+    obstacles = W == -1
 
-    def check(a: float) -> int:
+    def check(distance: float) -> int:
         """距離が効果範囲内かどうかを判定する関数"""
-        return 1 if a <= r else 0
+        return 1 if distance <= r else 0
 
-    return np.array([[check(distance(cockroach, facility)) for cockroach in cockroach_list] for facility in facility_list])
+    return np.array([
+        [check(distance_with_obstacles(cockroach, facility, obstacles))
+         for cockroach in cockroach_list]
+        for facility in facility_list
+    ])
 
-# パラメータを生成する関数
-def generate_parameters_from_file(
-    W: np.ndarray, facility_positions: Tuple[np.ndarray, np.ndarray], radius: float
-) -> np.ndarray:
-    """
-    ゴキブリの分布に基づいて需要変数の行列を生成する関数
 
-    Parameters:
-        W (np.ndarray): ゴキブリの数を含む行列
-        facility_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤の位置
-        radius (float): 殺虫剤の効果範囲
-
-    Returns:
-        np.ndarray: 需要変数行列A
-    """
-    num_rows, num_cols = W.shape
-    X, Y = np.indices((num_rows, num_cols))
-    cockroach_positions = (X.flatten(), Y.flatten())
-    A = make_matrix(cockroach_positions, facility_positions, radius)
-    return A
-
-# 最大カバー問題を解決する関数
-def solve_maximum_coverage_problem(pest_coverage: np.ndarray, p: int, w: np.ndarray) -> Tuple[np.ndarray, float]:
+def solve_maximum_coverage_problem(
+    pest_coverage: np.ndarray,
+    p: int,
+    w: np.ndarray
+) -> Tuple[np.ndarray, float]:
     """
     最大カバー問題を解決する関数
 
@@ -119,88 +155,128 @@ def solve_maximum_coverage_problem(pest_coverage: np.ndarray, p: int, w: np.ndar
     problem.solve()
 
     # 結果の表示
-    selected_pos = np.array([x[j].varValue for j in range(num_pest)])
-
-    # 駆除されたゴキブリの合計数を計算
+    selected_pos = np.array([x[j].value() for j in range(num_pest)])
     total_killed = problem.objective.value()
 
     return selected_pos, total_killed
 
-# 結果を可視化する関数
-def visualize_result(
-    W: np.ndarray, A: np.ndarray, selected_pos: np.ndarray, pest_positions: Tuple[np.ndarray, np.ndarray], radius: float
+def visualize_selected_facility_coverage(
+    W: np.ndarray,
+    A: np.ndarray,
+    selected_pos: np.ndarray,
+    facility_positions: Tuple[np.ndarray, np.ndarray],
+    cockroach_positions: Tuple[np.ndarray, np.ndarray]
 ) -> None:
     """
-    結果を可視化する関数
+    選択された殺虫剤とそのカバー範囲を可視化する関数
 
     Parameters:
-        W (np.ndarray): ゴキブリの数を含む行列
-        A (np.ndarray): 需要変数行列
-        selected_pos (np.ndarray): 選択された殺虫剤の配列
-        pest_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤の座標
-        radius (float): 殺虫剤の効果範囲
+        W (np.ndarray): ゴキブリの数と障害物を含む行列
+        A (np.ndarray): ゴキブリの需要変数行列
+        selected_pos (np.ndarray): 選択された殺虫剤のバイナリ配列
+        facility_positions (Tuple[np.ndarray, np.ndarray]): 殺虫剤のx座標とy座標
+        cockroach_positions (Tuple[np.ndarray, np.ndarray]): ゴキブリのx座標とy座標
     """
-    num_rows, num_cols = W.shape
+    obstacles = np.argwhere(W == -1)
+
+    facility_x, facility_y = facility_positions
+    selected_facility_x = np.array([facility_x[i] for i in range(len(facility_x)) if selected_pos[i] == 1], dtype=float)
+    selected_facility_y = np.array([facility_y[i] for i in range(len(facility_y)) if selected_pos[i] == 1], dtype=float)
+
+    grid_size = W.shape
+    cell_size = 1
+
+    fig, ax = plt.subplots(figsize=(12, 12))
 
     # グリッドの表示
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.set_aspect("equal")
-    ax.set_xlim(-0.5, num_cols - 0.5)
-    ax.set_ylim(-0.5, num_rows - 0.5)
-    ax.set_xticks(np.arange(0, num_cols, 1))
-    ax.set_yticks(np.arange(0, num_rows, 1))
-    ax.grid(which='both', color='gray', linestyle='--', linewidth=0.7)
+    for x in range(grid_size[1]):
+        for y in range(grid_size[0]):
+            color = 'white'
+            edge_color = 'black'
+            if W[y, x] > 0:
+                color = 'none'
+            elif W[y, x] == 0:
+                color = 'none'
+            elif W[y, x] == -1:
+                color = 'black'
+            ax.add_patch(Rectangle((x, y), cell_size, cell_size, color=color, edgecolor=edge_color))
 
-    # ゴキブリの数を表示
-    for i in range(num_rows):
-        for j in range(num_cols):
-            size = min(W[i, j] * 10, 100)  # サイズを制限して視覚的に調整
-            ax.plot(j, i, 'ro', markersize=size)
-            ax.text(j, i, f"{W[i, j]}", ha="center", va="center", color="white", fontsize=10, weight='bold')
+            if W[y, x] > 0:
+                ax.text(x + 0.5, y + 0.5, str(W[y, x]), color='black', ha='center', va='center', fontsize=10,label='ゴキブリの数')
 
-    # 殺虫剤の位置と影響範囲を表示
-    for idx, (i, j) in enumerate(zip(*pest_positions)):
-        if selected_pos[idx] > 0:
-            # 殺虫剤の位置を青色の円で表示
-            circle_center = plt.Circle((j, i), 0.5, color='blue', fill=True, edgecolor='black', linewidth=1.5)
-            ax.add_patch(circle_center)
-            # 殺虫剤の影響範囲を青い円で表示
-            influence_circle = plt.Circle((j, i), radius, color='blue', fill=False, linestyle='--', linewidth=2)
-            ax.add_patch(influence_circle)
+    # 選択された殺虫剤の表示
+    for idx, (fx, fy) in enumerate(zip(facility_x, facility_y)):
+        if selected_pos[idx] == 1:
+            # idx番目の殺虫剤の位置をインデックスから取得
+            ax.scatter(fx + 0.5, fy + 0.5, color='white', marker='x', s=100, label='殺虫剤の位置')
 
-    # プロットを表示
-    plt.gca().invert_yaxis()
+            # 駆除できるゴキブリを黄色で強調表示
+            for j, (cy, cx) in enumerate(zip(cockroach_positions[0], cockroach_positions[1])):
+                if A[idx, j] == 1:
+                    ax.add_patch(Rectangle((cx, cy), cell_size, cell_size, color='yellow', alpha=0.5, edgecolor='black'))
+
+    # 障害物を目立たせるための赤い枠線
+    for obs in obstacles:
+        ax.add_patch(Rectangle((obs[1], obs[0]), cell_size, cell_size, color='none', edgecolor='red', linestyle='--'))
+
+    # 凡例の設定
+    handles = [
+        Rectangle((0, 0), 1, 1, color='yellow', alpha=0.5),
+        Rectangle((0, 0), 1, 1, color='black', edgecolor='black', linestyle='--', linewidth=2),
+        Rectangle((0, 0), 1, 1, color='white', edgecolor='black', linestyle='-', linewidth=1)
+    ]
+
+    labels = [
+        '駆除できるゴキブリ',
+        '障害物',
+        "ゴキブリの数"
+    ]
+    ax.legend(handles=handles, labels=labels, loc='best')
+    ax.set_xlabel('X 座標')
+    ax.set_ylabel('Y 座標')
+    ax.set_title('選択された殺虫剤と駆除できるゴキブリ')
+    ax.grid(True)
+    ax.invert_yaxis()
+
+    # Streamlitに描画
     st.pyplot(fig)
 
-# ストリームリットによるUIの構築
+
+
+
 def main() -> None:
-    st.title("最大カバー問題のシミュレーション - ゴキブリ駆除の最適化")
+    """
+    Streamlit アプリケーションのメイン関数
+    """
+    st.title("最大カバー問題のシミュレーション - ゴキブリ駆除の最適配置")
     st.sidebar.title("設定")
 
     # エクセルファイルのアップロード
     uploaded_file = st.sidebar.file_uploader("ゴキブリの分布データをアップロードしてください", type=["xlsx"])
 
-    if uploaded_file:
-        W = load_cockroach_distribution(uploaded_file)
+    if uploaded_file is not None:
+        W = load_cockroach_and_obstacles(uploaded_file)
         st.sidebar.success("ファイルのアップロードに成功しました")
 
-        # 殺虫剤の効果範囲と配置可能数の入力
-        radius = st.sidebar.number_input("殺虫剤の効果範囲", min_value=0.1, max_value=20.0, value=2.0, step=0.1)
+        # パラメータの設定
         p = st.sidebar.number_input("設置可能な殺虫剤の数", min_value=1, max_value=50, value=3)
+        r = st.sidebar.number_input("殺虫剤の効果範囲", min_value=0.1, max_value=20.0, value=2.0, step=0.1)
 
-        # 需要変数行列の生成
-        num_rows, num_cols = W.shape
-        X, Y = np.indices((num_rows, num_cols))
-        pest_positions = (X.flatten(), Y.flatten())
-        A = generate_parameters_from_file(W, pest_positions, radius)
+        # ゴキブリと施設の座標
+        cockroach_positions = np.where(W >= 0)
+        facility_positions = np.where(W != -1)
 
-        # 最大カバー問題の解決
-        selected_pos, total_killed = solve_maximum_coverage_problem(A, p, W.flatten())
+        # 需要変数行列の作成
+        A = make_matrix_with_obstacles(cockroach_positions, facility_positions, W, r)
 
-        st.sidebar.write(f"駆除されたゴキブリの合計数: {int(total_killed)}")
+        # 最大カバー問題を解く
+        selected_pos, total_killed = solve_maximum_coverage_problem(A, p, W[cockroach_positions])
+
+        st.write(f"駆除されたゴキブリの合計数: {total_killed}")
 
         # 結果の可視化
-        visualize_result(W, A, selected_pos, pest_positions, radius)
+        visualize_selected_facility_coverage(W, A, selected_pos, facility_positions, cockroach_positions)
+
 
 if __name__ == "__main__":
     main()
