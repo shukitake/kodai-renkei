@@ -208,6 +208,7 @@ numpy==1.26.3
     # via pyarrow
     # via pydeck
     # via seaborn
+    # via shapely
     # via streamlit
 openpyxl==3.1.5
     # via research-template
@@ -312,6 +313,8 @@ ruff==0.4.1
 seaborn==0.13.2
 send2trash==1.8.3
     # via jupyter-server
+shapely==2.0.6
+    # via research-template
 six==1.16.0
     # via asttokens
     # via bleach

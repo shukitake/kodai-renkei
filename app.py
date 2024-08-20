@@ -7,6 +7,8 @@ import pandas as pd
 import pulp
 import streamlit as st
 from matplotlib.patches import Circle, Rectangle
+from shapely.geometry import LineString, Point
+from shapely.geometry.polygon import Polygon
 
 
 def load_cockroach_and_obstacles(file: "UploadedFile") -> np.ndarray[Any, Any]:
@@ -23,65 +25,41 @@ def load_cockroach_and_obstacles(file: "UploadedFile") -> np.ndarray[Any, Any]:
     return df.values
 
 
-def distance_with_obstacles(p1: np.ndarray, p2: np.ndarray, grid: np.ndarray) -> float:
+def distance_with_obstacles(
+    cockroach: Tuple[float, float],
+    facility: Tuple[float, float],
+    obstacles: np.ndarray
+) -> float:
     """
-    障害物を考慮して2点間の距離を計算する関数
+    障害物を考慮したゴキブリと殺虫剤間の距離を計算する関数
 
     Parameters:
-        p1 (np.ndarray): 1点目の座標
-        p2 (np.ndarray): 2点目の座標
-        grid (np.ndarray): 障害物を含むグリッド
+        cockroach (Tuple[float, float]): ゴキブリの位置 (x, y)
+        facility (Tuple[float, float]): 殺虫剤の位置 (x, y)
+        obstacles (np.ndarray): 障害物の位置を含む配列
 
     Returns:
-        float: 2点間の距離 (障害物がある場合はinf)
+        float: ゴキブリと殺虫剤間の障害物を考慮した距離
     """
-    # 初期のユークリッド距離を計算
-    dist = np.linalg.norm(p1 - p2)
+    # ゴキブリと殺虫剤の位置を点として扱う
+    start = Point(cockroach)
+    end = Point(facility)
 
-    # 障害物の座標を取得
-    obstacles = np.argwhere(grid == -1)
+    # ゴキブリと殺虫剤の間の直線を定義
+    line = LineString([start, end])
 
-    # 線分上の障害物が存在するかどうかをチェック
-    for obstacle in obstacles:
-        if is_on_segment(p1, p2, obstacle):
-            return float('inf')
+    # 障害物のポリゴンを作成
+    obstacle_polygons = [Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]) for x, y in np.argwhere(obstacles)]
 
-    return dist
+    # 障害物のポリゴンが直線と交差するかどうかを確認
+    for polygon in obstacle_polygons:
+        if line.intersects(polygon):
+            return float('inf')  # 障害物が直線と交差する場合は距離を無限大に設定
 
-def is_on_segment(p1: np.ndarray, p2: np.ndarray, point: np.ndarray) -> bool:
-    """
-    点が直線セグメント上にあるかどうかをチェックする関数
+    # 障害物がなければ直線距離を返す
+    return line.length
 
-    Parameters:
-        p1 (np.ndarray): 直線セグメントの始点
-        p2 (np.ndarray): 直線セグメントの終点
-        point (np.ndarray): 判定する点
 
-    Returns:
-        bool: 点が直線セグメント上にある場合はTrue、それ以外はFalse
-    """
-    x0, y0 = p1
-    x1, y1 = p2
-    x, y = point
-
-    # ベクトル計算による直線距離の計算
-    line_vec = np.array([x1 - x0, y1 - y0])
-    point_vec = np.array([x - x0, y - y0])
-    line_length_sq = np.dot(line_vec, line_vec)
-
-    # 線分上の点までの投影
-    projection = np.dot(point_vec, line_vec) / line_length_sq
-
-    # 投影が線分の範囲内にあるかどうかを確認
-    if projection < 0 or projection > 1:
-        return False
-
-    # 投影点を計算し、その点と障害物までの距離を確認
-    projected_point = np.array([x0, y0]) + projection * line_vec
-    distance_to_segment = np.linalg.norm(projected_point - np.array([x, y]))
-
-    # 点が線分上にあり、かつ障害物までの距離が非常に小さい場合はTrue
-    return distance_to_segment < 1e-6
 
 def make_matrix_with_obstacles(
     cockroach_positions: Tuple[np.ndarray, np.ndarray],
