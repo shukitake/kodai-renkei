@@ -9,6 +9,7 @@ import streamlit as st
 from matplotlib.patches import Circle, Rectangle
 from shapely.geometry import LineString, Point
 from shapely.geometry.polygon import Polygon
+from shapely.ops import unary_union
 
 
 def load_cockroach_and_obstacles(file: "UploadedFile") -> np.ndarray[Any, Any]:
@@ -42,19 +43,19 @@ def distance_with_obstacles(
         float: ゴキブリと殺虫剤間の障害物を考慮した距離
     """
     # ゴキブリと殺虫剤の位置を点として扱う
-    start = Point(cockroach)
-    end = Point(facility)
+    start = Point(facility)
+    end = Point(cockroach)
 
     # ゴキブリと殺虫剤の間の直線を定義
     line = LineString([start, end])
 
-    # 障害物のポリゴンを作成
-    obstacle_polygons = [Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]) for x, y in np.argwhere(obstacles)]
+    # 障害物のポリゴンを作成し、隣接するポリゴンを結合
+    obstacle_polygons = [Polygon([(x-0.5, y-0.5), (x + 0.5, y - 0.5), (x + 0.5, y + 0.5), (x - 0.5, y + 0.5)]) for x, y in np.argwhere(obstacles)]
+    combined_obstacles = unary_union(obstacle_polygons)
 
     # 障害物のポリゴンが直線と交差するかどうかを確認
-    for polygon in obstacle_polygons:
-        if line.intersects(polygon):
-            return float('inf')  # 障害物が直線と交差する場合は距離を無限大に設定
+    if line.intersects(combined_obstacles):
+        return float('1000')  # 障害物が直線と交差する場合は距離を無限大に設定
 
     # 障害物がなければ直線距離を返す
     return line.length
